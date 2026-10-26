@@ -1,0 +1,115 @@
+/*
+ * IR Remote Button Code Tester
+ * Board : WeMos D1 Mini (ESP8266)
+ * LCD   : 16x2 I2C (address 0x27 or 0x3F)
+ * IR    : VS1838B / TSOP38238 on D5 (GPIO14)
+ *
+ * Libraries (install via Library Manager):
+ *   - IRremoteESP8266        (tested with v2.8.6)
+ *   - LiquidCrystal_I2C      (by Frank de Brabander, v1.1.4)
+ *
+ * Wiring:
+ *   IR receiver  OUT -> D5 (GPIO14)
+ *   IR receiver  VCC -> 3.3V
+ *   IR receiver  GND -> GND
+ *   LCD SDA          -> D2 (GPIO4)
+ *   LCD SCL          -> D1 (GPIO5)
+ *   LCD VCC          -> 5V (most I2C backpacks) or 3.3V
+ *   LCD GND          -> GND
+ */
+
+#include <IRremoteESP8266.h>
+#include <IRrecv.h>
+#include <IRutils.h>
+
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// -------- LCD --------
+LiquidCrystal_I2C lcd(0x27, 16, 2);   // change to 0x3F if your backpack needs it
+
+// -------- IR --------
+const uint16_t IR_PIN = D5;           // GPIO14
+const uint16_t CAPTURE_BUFFER = 1024; // enough for any remote; safe default
+IRrecv irrecv(IR_PIN, CAPTURE_BUFFER, 15, true);
+decode_results results;
+
+// -------- Helpers --------
+// Print a 32-bit value as exactly 8 hex digits (pads with leading zeros)
+void printHex32(Print &out, uint32_t value) {
+  char buf[11];
+  snprintf(buf, sizeof(buf), "0x%08X", value);
+  out.print(buf);
+}
+
+// Write a string to an LCD line, padding with spaces so we never need lcd.clear()
+void lcdPrintLine(uint8_t row, const char *text) {
+  lcd.setCursor(0, row);
+  char padded[17];
+  snprintf(padded, sizeof(padded), "%-16.16s", text);   // pad/truncate to 16 chars
+  lcd.print(padded);
+}
+
+void showStartup() {
+  lcdPrintLine(0, "IR Code Tester");
+  lcdPrintLine(1, "Waiting...");
+}
+
+void setup() {
+  Serial.begin(9600);
+  delay(100);
+  Serial.println();
+  Serial.println(F("IR Code Tester starting..."));
+
+  lcd.init();
+  lcd.backlight();
+  showStartup();
+
+  irrecv.enableIRIn();
+  Serial.println(F("Ready. Press a remote button."));
+}
+
+void loop() {
+  if (!irrecv.decode(&results)) return;
+
+  // --- Repeat frame handling ---------------------------------------------
+  // A held button sends 0xFFFFFFFF repeat frames. We show them once, but
+  // they are not a new button press — so don't overwrite a real code with
+  // repeats in the display. (Here we simply ignore them for the display.)
+  if (results.value == 0xFFFFFFFF || results.repeat) {
+    Serial.println(F("(repeat frame ignored)"));
+    irrecv.resume();
+    return;
+  }
+
+  // --- Build the two display lines ---------------------------------------
+  String protocol = typeToString(results.decode_type);
+  if (protocol.length() == 0) protocol = "UNKNOWN";
+
+  char line1[17];
+  snprintf(line1, sizeof(line1), "%-16.16s", protocol.c_str());
+
+  char line2[17];
+  snprintf(line2, sizeof(line2), "0x%08X", (uint32_t)results.value);
+
+  // --- LCD (no flicker: write full 16-char lines) ------------------------
+  lcdPrintLine(0, line1);
+  lcdPrintLine(1, line2);
+
+  // --- Serial log --------------------------------------------------------
+  Serial.println(F("---------------"));
+  Serial.print(F("Protocol : "));
+  Serial.println(protocol);
+  Serial.print(F("HEX      : "));
+  printHex32(Serial, (uint32_t)results.value);
+  Serial.println();
+  Serial.print(F("Dec      : "));
+  Serial.println((uint32_t)results.value);
+  Serial.print(F("Bits     : "));
+  Serial.println(results.bits);
+  Serial.print(F("Raw len  : "));
+  Serial.println(results.rawlen);
+  Serial.println(F("---------------"));
+
+  irrecv.resume();
+}
